@@ -13,7 +13,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
@@ -24,7 +24,7 @@ jobs:
         msbuildArchitecture: x64
         
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Add MSBuild to PATH
       run: |
@@ -63,7 +63,7 @@ jobs:
         Get-ChildItem -Path . -Name "*.pdb" -Recurse
         
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MalayalamIME-Build-x64
         path: |
@@ -74,7 +74,7 @@ jobs:
         retention-days: 30
         
     - name: Upload installer files
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MalayalamIME-Installer-Files
         path: |
@@ -90,7 +90,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Build with minimal dependencies
       run: |
@@ -104,7 +104,7 @@ jobs:
         & cl /LD MalayalamIME.cpp Register.cpp /FoRelease\ /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 /D_CRT_SECURE_NO_WARNINGS /link /DLL /SUBSYSTEM:WINDOWS /OUT:MalayalamIME-minimal.dll /DEF:MalayalamIME.def user32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib msctf.lib comctl32.lib shlwapi.lib
         
     - name: Upload minimal build
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MalayalamIME-Minimal-Build
         path: cpp/MalayalamIME-minimal.dll
