@@ -109,3 +109,22 @@ jobs:
         name: MalayalamIME-Minimal-Build
         path: cpp/MalayalamIME-minimal.dll
         retention-days: 30
+
+    - name: Upload compiled DLL
+  uses: actions/upload-artifact@v4  # ← Change v3 to v4
+  with:
+    name: MalayalamIME-Enhanced
+    path: Release/MalayalamIME.dll
+    retention-days: 30
+
+  - name: Upload all source files
+  uses: actions/upload-artifact@v4  # ← Change v3 to v4
+  with:
+    name: Complete-Source
+    path: |
+      src/
+      *.cpp
+      *.h
+      *.def
+      docs/
+    retention-days: 30
