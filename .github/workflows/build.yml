@@ -1,0 +1,291 @@
+name: Build Malayalam IME DLL
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Visual Studio Build Tools
+      run: |
+        Write-Host "Downloading Visual Studio Build Tools installer..."
+        $ProgressPreference = 'SilentlyContinue'
+        
+        # Download the latest Visual Studio Build Tools installer
+        Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "vs_buildtools.exe"
+        
+        # Install Visual Studio Build Tools with C++ build tools workload
+        Write-Host "Installing Visual Studio Build Tools with C++ workload..."
+        .\vs_buildtools.exe --quiet --wait --norestart --nocache `
+          --add Microsoft.VisualStudio.Workload.VCTools `
+          --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+          --add Microsoft.VisualStudio.Component.Windows10SDK.19041 `
+          --add Microsoft.VisualStudio.Component.Windows11SDK.22621 `
+          --add Microsoft.VisualStudio.Component.TestTools.BuildTools `
+          --add Microsoft.VisualStudio.Component.CoreBuildTools `
+          --add Microsoft.VisualStudio.Component.VC.CoreBuildTools
+        
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "Visual Studio Build Tools installation completed successfully"
+        } else {
+          Write-Host "Visual Studio Build Tools installation failed with exit code: $LASTEXITCODE"
+          exit 1
+        }
+
+    - name: Setup build environment
+      run: |
+        Write-Host "Setting up build environment..."
+        
+        # Get Visual Studio installation path
+        $vsPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools"
+        if (Test-Path $vsPath) {
+          Write-Host "Found Visual Studio at: $vsPath"
+        } else {
+          $vsPath = "C:\Program Files\Microsoft Visual Studio\2022\Community"
+          if (Test-Path $vsPath) {
+            Write-Host "Found Visual Studio Community at: $vsPath"
+          } else {
+            Write-Host "Visual Studio installation not found in expected locations"
+          }
+        }
+
+    - name: Initialize Visual Studio environment
+      shell: cmd
+      run: |
+        echo "Initializing Visual Studio environment..."
+        
+        # Try different possible locations for vcvars64.bat
+        set VS_PATH_1=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat
+        set VS_PATH_2=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat
+        set VS_PATH_3=C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build\vcvars64.bat
+        
+        if exist "%VS_PATH_1%" (
+          echo Found vcvars64.bat at %VS_PATH_1%
+          call "%VS_PATH_1%" x64
+        ) else if exist "%VS_PATH_2%" (
+          echo Found vcvars64.bat at %VS_PATH_2%
+          call "%VS_PATH_2%" x64
+        ) else if exist "%VS_PATH_3%" (
+          echo Found vcvars64.bat at %VS_PATH_3%
+          call "%VS_PATH_3%" x64
+        ) else (
+          echo ERROR: Could not find vcvars64.bat in any expected location
+          dir "C:\Program Files (x86)\Microsoft Visual Studio\"
+          exit 1
+        )
+        
+        echo Checking CL compiler availability...
+        cl /?
+        if errorlevel 1 (
+          echo ERROR: CL compiler is not available
+          exit 1
+        )
+        
+        echo Environment setup completed successfully
+
+    - name: Verify source files
+      shell: cmd
+      run: |
+        echo Verifying source files...
+        if exist "src\MalayalamIME.cpp" (
+          echo Found MalayalamIME.cpp
+        ) else (
+          echo ERROR: MalayalamIME.cpp not found
+          dir src\
+          exit 1
+        )
+        
+        if exist "src\Register.cpp" (
+          echo Found Register.cpp
+        ) else (
+          echo ERROR: Register.cpp not found
+          dir src\
+          exit 1
+        )
+        
+        if exist "src\stdafx.h" (
+          echo Found stdafx.h
+        ) else (
+          echo ERROR: stdafx.h not found
+          dir src\
+          exit 1
+        )
+        
+        echo All source files verified successfully
+
+    - name: Build Malayalam IME DLL
+      shell: cmd
+      run: |
+        echo Starting Malayalam IME DLL compilation...
+        
+        # Initialize Visual Studio environment
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" x64
+        
+        # Show current directory
+        echo Current directory: %CD%
+        
+        # List files in src directory
+        echo Files in src directory:
+        dir src
+        
+        # Compile with absolute paths and proper options
+        echo Compiling MalayalamIME.cpp and Register.cpp...
+        cl /LD ^
+            /Fe:"MalayalamIME.dll" ^
+            /Fo:obj\ ^
+            src\MalayalamIME.cpp ^
+            src\Register.cpp ^
+            /EHsc ^
+            /DWIN32_LEAN_AND_MEAN ^
+            /DNOMINMAX ^
+            /D_CRT_SECURE_NO_WARNINGS ^
+            /D_WINDLL ^
+            /D_USRDLL ^
+            /D_WINDOWS ^
+            /DUSES_IAT ^
+            kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib atl.lib atls.lib atlthunk.lib atlapp.lib
+        
+        if errorlevel 1 (
+          echo ERROR: Compilation failed
+          echo Trying alternative approach...
+          
+          # Alternative: Try without ATL dependencies
+          cl /LD ^
+              /Fe:"MalayalamIME.dll" ^
+              /Fo:obj\ ^
+              src\MalayalamIME.cpp ^
+              src\Register.cpp ^
+              /EHsc ^
+              /DWIN32_LEAN_AND_MEAN ^
+              /DNOMINMAX ^
+              /D_CRT_SECURE_NO_WARNINGS ^
+              /D_WINDLL ^
+              /D_USRDLL ^
+              /D_WINDOWS ^
+              kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib
+        ) else (
+          echo Compilation completed successfully
+        )
+
+    - name: Verify build output
+      run: |
+        Write-Host "Verifying build output..."
+        if (Test-Path "MalayalamIME.dll") {
+          Write-Host "SUCCESS: MalayalamIME.dll created successfully"
+          $dllSize = (Get-Item "MalayalamIME.dll").Length
+          Write-Host "DLL size: $dllSize bytes"
+          
+          # Copy to artifacts directory
+          New-Item -ItemType Directory -Force -Path "artifacts" | Out-Null
+          Copy-Item "MalayalamIME.dll" "artifacts\"
+          
+          Write-Host "DLL copied to artifacts directory"
+        } else {
+          Write-Host "ERROR: MalayalamIME.dll was not created"
+          Write-Host "Checking for any .dll files:"
+          Get-ChildItem *.dll -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Found: $($_.Name)" }
+          
+          Write-Host "Checking obj directory:"
+          if (Test-Path "obj") {
+            Get-ChildItem "obj" | ForEach-Object { Write-Host "  $($_.Name)" }
+          } else {
+            Write-Host "obj directory does not exist"
+          }
+          
+          exit 1
+        }
+
+    - name: Upload DLL artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MalayalamIME-dll
+        path: |
+          MalayalamIME.dll
+          artifacts/MalayalamIME.dll
+        retention-days: 30
+
+    - name: Create installation package
+      run: |
+        Write-Host "Creating installation package..."
+        
+        # Create installation directory
+        New-Item -ItemType Directory -Force -Path "installation" | Out-Null
+        
+        # Copy DLL to installation directory
+        Copy-Item "MalayalamIME.dll" "installation\"
+        
+        # Create installation instructions
+        @"
+# Malayalam IME Installation Instructions
+
+## Files Included
+- MalayalamIME.dll - The main IME DLL file
+
+## Installation Steps
+1. Right-click on the desktop or in a folder and select "New > Text Document"
+2. Create a new batch file named "install-ime.bat"
+3. Copy the following content into the batch file:
+```batch
+@echo off
+echo Installing Malayalam IME...
+regsvr32 /s MalayalamIME.dll
+echo Installation completed. Please restart your computer or sign out and sign back in.
+pause
+```
+4. Place both the batch file and MalayalamIME.dll in the same directory
+5. Right-click on install-ime.bat and select "Run as administrator"
+6. Restart your computer when prompted
+7. In Windows Settings > Time & Language > Language & region, add Malayalam as an input method
+
+## Uninstallation
+To uninstall the IME, create an "uninstall-ime.bat" file with:
+```batch
+@echo off
+echo Uninstalling Malayalam IME...
+regsvr32 /u /s MalayalamIME.dll
+echo Uninstallation completed.
+pause
+```
+
+## Troubleshooting
+- If installation fails, make sure you have administrator privileges
+- The IME will appear in your language settings after a system restart
+- For 64-bit systems, use the 64-bit version of the DLL
+"@ | Out-File -FilePath "installation\INSTALL_INSTRUCTIONS.md" -Encoding UTF8
+        
+        # Copy installation files to artifacts
+        Copy-Item "installation\*" "artifacts\" -Recurse -Force
+        
+        Write-Host "Installation package created successfully"
+
+    - name: Upload installation package
+      uses: actions/upload-artifact@v4
+      with:
+        name: MalayalamIME-installation
+        path: |
+          installation/
+          artifacts/
+        retention-days: 30
+
+    - name: Display final status
+      run: |
+        Write-Host "Build process completed successfully!"
+        Write-Host "Artifacts available:"
+        Write-Host "- MalayalamIME-dll: Contains the compiled DLL file"
+        Write-Host "- MalayalamIME-installation: Contains DLL and installation instructions"
+        Write-Host ""
+        Write-Host "Next steps:"
+        Write-Host "1. Download the 'MalayalamIME-installation' artifact"
+        Write-Host "2. Extract the files to a folder"
+        Write-Host "3. Run install-ime.bat as administrator"
+        Write-Host "4. Restart your computer"
+        Write-Host "5. Add Malayalam as input method in Windows Settings"
