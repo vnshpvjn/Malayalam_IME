@@ -8,123 +8,270 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  build:
     runs-on: windows-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.1
-      
-    - name: Setup Visual Studio
-      uses: microsoft/setup-msbuild@v1.1
-      with:
-        msbuildArchitecture: x64
-        
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      
-    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Use MSBuild in PATH
       run: |
-        Write-Host "Adding MSBuild to PATH"
-        Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64"
+        Write-Host "MSBuild version and location:"
+        msbuild -version
+        where msbuild
         
-    - name: Build Malayalam IME
-      run: |
-        cd cpp
-        Write-Host "Current directory: $(Get-Location)"
-        Write-Host "Building Malayalam IME..."
-        
-        # Try MSBuild first
-        if (Test-Path "MalayalamIME.sln") {
-          Write-Host "Using MSBuild with solution file..."
-          & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" MalayalamIME.sln /p:Configuration=Release /p:Platform=x64
+        # Set up MSBuild in PATH for C++ builds
+        $msbuildPath = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin"
+        if (Test-Path $msbuildPath) {
+            Write-Host "Adding MSBuild to PATH: $msbuildPath"
+            Add-Content -Path $env:GITHUB_PATH -Value $msbuildPath
         } else {
-          Write-Host "Using direct compilation..."
-          # Fallback to direct compilation
-          $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          & $vcvars
-          
-          # Create output directory
-          New-Item -ItemType Directory -Force -Path "Release"
-          
-          # Compile
-          & cl /LD MalayalamIME.cpp Register.cpp /FoRelease\ /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 /link /DLL /SUBSYSTEM:WINDOWS /OUT:MalayalamIME.dll /DEF:MalayalamIME.def user32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib msctf.lib
+            # Try other common Visual Studio paths
+            $vsPaths = @(
+                "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin",
+                "C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin",
+                "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\MSBuild\Current\Bin",
+                "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin"
+            )
+            
+            foreach ($path in $vsPaths) {
+                if (Test-Path $path) {
+                    Write-Host "Found Visual Studio at: $path"
+                    Add-Content -Path $env:GITHUB_PATH -Value $path
+                    break
+                }
+            }
+        }
+
+    - name: Find Visual Studio C++ Compiler
+      run: |
+        # Find CL.exe in common locations
+        $clPaths = @(
+            "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+            "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat", 
+            "C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvars64.bat",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+            "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat"
+        )
+        
+        foreach ($path in $clPaths) {
+            if (Test-Path $path) {
+                Write-Host "Found vcvars64.bat at: $path"
+                
+                # Run vcvars64.bat to set up the environment
+                Write-Host "Setting up C++ environment..."
+                & cmd /c "`"$path`" && echo CL_PATH=`"%VCINSTALLDIR%Tools\MSVC\*\bin\Hostx64\x64`""
+                
+                # Find cl.exe
+                $clCmd = Get-Command "cl.exe" -ErrorAction SilentlyContinue
+                if ($clCmd) {
+                    Write-Host "Found cl.exe: $($clCmd.Source)"
+                } else {
+                    # Manual search for cl.exe
+                    $vsRoot = Split-Path (Split-Path (Split-Path $path -Parent) -Parent) -Parent
+                    $searchPaths = @(
+                        "$vsRoot\VC\Tools\MSVC\*\bin\Hostx64\x64",
+                        "$vsRoot\VC\Auxiliary\Build\*\Hostx64\x64",
+                        "$vsRoot\VC\Tools\Llvm\x64\bin",
+                        "$vsRoot\VC\Tools\MSVC\*\bin\Hostx64\x64"
+                    )
+                    
+                    foreach ($searchPath in $searchPaths) {
+                        $wildcardPath = $searchPath -replace '\*', '*'
+                        $clCandidates = Get-ChildItem -Path $wildcardPath -Filter "cl.exe" -Recurse -ErrorAction SilentlyContinue
+                        if ($clCandidates) {
+                            $clDir = Split-Path $clCandidates[0].FullName
+                            Write-Host "Found cl.exe candidates in: $clDir"
+                            Add-Content -Path $env:GITHUB_PATH -Value $clDir
+                            break
+                        }
+                    }
+                }
+                break
+            }
+        }
+
+    - name: Display directory structure
+      run: |
+        Write-Host "=== Repository Structure ==="
+        Get-ChildItem -Recurse -Directory
+        Write-Host "=== C++ Files ==="
+        Get-ChildItem -Recurse -Filter "*.cpp" -Name
+        Get-ChildItem -Recurse -Filter "*.h" -Name
+
+    - name: Check for source files
+      run: |
+        Write-Host "Looking for MalayalamIME.cpp..."
+        $cppFiles = Get-ChildItem -Recurse -Filter "MalayalamIME.cpp" -Name
+        if ($cppFiles) {
+            Write-Host "Found MalayalamIME.cpp:"
+            $cppFiles | ForEach-Object { Write-Host "  - $_" }
+        } else {
+            Write-Host "ERROR: MalayalamIME.cpp not found!"
+            Write-Host "Available files:"
+            Get-ChildItem -Recurse -Filter "*.cpp" -Name
+            exit 1
+        }
+
+    - name: Find source directory
+      id: find-source
+      run: |
+        Write-Host "Building Malayalam IME with enhanced chillu character support..."
+        
+        # Check src subdirectory first (recommended structure)
+        if (Test-Path "src\MalayalamIME.cpp") {
+            $sourceDir = "src"
+            Write-Host "Using src subdirectory structure"
+        }
+        # Check root directory
+        elseif (Test-Path "MalayalamIME.cpp") {
+            $sourceDir = "."
+            Write-Host "Using root directory structure"
+        }
+        # Search recursively
+        else {
+            Write-Host "Searching for MalayalamIME.cpp in subdirectories..."
+            $sourceFile = Get-ChildItem -Recurse -Filter "MalayalamIME.cpp" -Name
+            if ($sourceFile) {
+                $sourceDir = Split-Path -Parent $sourceFile[0]
+                Write-Host "Found in: $sourceDir"
+            } else {
+                Write-Host "ERROR: Could not find MalayalamIME.cpp"
+                exit 1
+            }
         }
         
-    - name: Check build output
-      run: |
-        cd cpp
-        Write-Host "Checking for build artifacts..."
-        Get-ChildItem -Path . -Name "*.dll" -Recurse
-        Get-ChildItem -Path . -Name "*.lib" -Recurse
-        Get-ChildItem -Path . -Name "*.pdb" -Recurse
-        
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: MalayalamIME-Build-x64
-        path: |
-          cpp/MalayalamIME.dll
-          cpp/MalayalamIME.lib
-          cpp/MalayalamIME.exp
-          cpp/MalayalamIME.pdb
-        retention-days: 30
-        
-    - name: Upload installer files
-      uses: actions/upload-artifact@v4
-      with:
-        name: MalayalamIME-Installer-Files
-        path: |
-          cpp/*.bat
-          cpp/*.md
-          cpp/MalayalamIME.def
-          cpp/MalayalamIME.rc
-        retention-days: 30
+        echo "SOURCE_DIR=$sourceDir" >> $env:GITHUB_OUTPUT
+        Write-Host "Using source directory: $sourceDir"
 
-  build-minimal:
-    runs-on: windows-latest
-    if: failure()
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Build with minimal dependencies
+    - name: Create Release directory
       run: |
-        cd cpp
-        Write-Host "Attempting minimal build..."
-        
-        # Create output directory
         New-Item -ItemType Directory -Force -Path "Release"
+        Write-Host "Release directory created"
+
+    - name: Check for required files
+      run: |
+        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
+        Write-Host "Checking source directory: $sourceDir"
         
-        # Minimal compilation without ATL
-        & cl /LD MalayalamIME.cpp Register.cpp /FoRelease\ /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE /DWINVER=0x0601 /D_WIN32_WINNT=0x0601 /D_CRT_SECURE_NO_WARNINGS /link /DLL /SUBSYSTEM:WINDOWS /OUT:MalayalamIME-minimal.dll /DEF:MalayalamIME.def user32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib msctf.lib comctl32.lib shlwapi.lib
+        $requiredFiles = @("MalayalamIME.cpp", "Register.cpp")
+        foreach ($file in $requiredFiles) {
+            if (Test-Path "$sourceDir\$file") {
+                Write-Host "✓ Found: $file"
+            } else {
+                Write-Host "✗ Missing: $file"
+                Write-Host "Available files in $sourceDir:"
+                Get-ChildItem "$sourceDir\*" -Name
+                exit 1
+            }
+        }
+
+    - name: Compile Malayalam IME
+      run: |
+        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
+        Write-Host "Compiling from: $sourceDir"
         
-    - name: Upload minimal build
-      uses: actions/upload-artifact@v4
-      with:
-        name: MalayalamIME-Minimal-Build
-        path: cpp/MalayalamIME-minimal.dll
-        retention-days: 30
+        # Verify cl is available
+        $clCmd = Get-Command "cl.exe" -ErrorAction SilentlyContinue
+        if ($clCmd) {
+            Write-Host "✓ Found compiler: $($clCmd.Source)"
+        } else {
+            Write-Host "✗ CL compiler not found, trying manual approach..."
+            # Try using MSBuild to compile C++ files
+            Write-Host "Using MSBuild approach..."
+            cd $sourceDir
+            
+            # Create a simple build script
+            $buildScript = @"
+            @echo off
+            echo Compiling Malayalam IME...
+            cl /LD MalayalamIME.cpp Register.cpp /Fo..\Release\ /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE /link /DLL /OUT:..\Release\MalayalamIME.dll
+            @echo Build complete
+            "@
+            
+            $buildScript | Out-File -FilePath "build.bat" -Encoding ASCII
+            & cmd /c "build.bat"
+        }
+        
+        # Main compilation command
+        if (Test-Path "cl.exe") {
+            Write-Host "Using CL compiler directly..."
+            cl /LD "$sourceDir\MalayalamIME.cpp" "$sourceDir\Register.cpp" /FoRelease\ /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE /link /DLL /OUT:Release\MalayalamIME.dll
+        }
+
+    - name: Alternative compilation method
+      if: failure()
+      run: |
+        Write-Host "Trying alternative compilation..."
+        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
+        
+        # Simple compilation without dependencies
+        cd $sourceDir
+        cl /LD MalayalamIME.cpp Register.cpp /Fo..\Release\ /DUNICODE /link /DLL /OUT:..\Release\MalayalamIME.dll
+
+    - name: Minimal compilation
+      if: failure()
+      run: |
+        Write-Host "Minimal compilation attempt..."
+        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
+        cd $sourceDir
+        cl /LD MalayalamIME.cpp /Fo..\Release\ /link /DLL /OUT:..\Release\MalayalamIME.dll
+
+    - name: Verify build output
+      run: |
+        if (Test-Path "Release\MalayalamIME.dll") {
+            Write-Host "✅ SUCCESS: MalayalamIME.dll created!"
+            Write-Host "File size: $((Get-Item "Release\MalayalamIME.dll").Length) bytes"
+            Write-Host "Build timestamp: $((Get-Item "Release\MalayalamIME.dll").LastWriteTime)"
+        } else {
+            Write-Host "❌ ERROR: MalayalamIME.dll not found!"
+            Write-Host "Release directory contents:"
+            Get-ChildItem Release -Recurse -Force
+            exit 1
+        }
 
     - name: Upload compiled DLL
-  uses: actions/upload-artifact@v4  # ← Change v3 to v4
-  with:
-    name: MalayalamIME-Enhanced
-    path: Release/MalayalamIME.dll
-    retention-days: 30
+      uses: actions/upload-artifact@v4
+      with:
+        name: MalayalamIME-Enhanced
+        path: Release/MalayalamIME.dll
+        retention-days: 30
 
-  - name: Upload all source files
-  uses: actions/upload-artifact@v4  # ← Change v3 to v4
-  with:
-    name: Complete-Source
-    path: |
-      src/
-      *.cpp
-      *.h
-      *.def
-      docs/
-    retention-days: 30
+    - name: Upload all source files
+      uses: actions/upload-artifact@v4
+      with:
+        name: Complete-Source
+        path: |
+          src/
+          *.cpp
+          *.h
+          *.def
+          docs/
+        retention-days: 30
+
+    - name: Build summary
+      run: |
+        Write-Host "═══════════════════════════════════════════════════════"
+        Write-Host "           BUILD SUMMARY"
+        Write-Host "═══════════════════════════════════════════════════════"
+        Write-Host "Enhanced Malayalam IME with 150+ chillu character mappings"
+        Write-Host "Build completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        Write-Host ""
+        
+        if (Test-Path "Release\MalayalamIME.dll") {
+            Write-Host "🎉 Status: SUCCESS"
+            Write-Host "📁 Output: Release\MalayalamIME.dll"
+            Write-Host "📏 Size: $((Get-Item "Release\MalayalamIME.dll").Length) bytes"
+            Write-Host ""
+            Write-Host "✅ Download the compiled DLL from Artifacts"
+            Write-Host "✅ Ready for installation and testing"
+        } else {
+            Write-Host "❌ Status: FAILED"
+            Write-Host "🔍 Check build logs for details"
+        }
+        
+        Write-Host "═══════════════════════════════════════════════════════"
