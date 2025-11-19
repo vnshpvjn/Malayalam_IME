@@ -18,285 +18,266 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Setup Visual Studio C++ tools
-      run: |
-        Write-Host "Setting up Visual Studio C++ environment..."
-        
-        # Find Visual Studio 2022 Enterprise installation path
-        $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        if (Test-Path $vsWhere) {
-          $vsPath = & $vsWhere -products Microsoft.VisualStudio.Product.Enterprise -latest -property installationPath
-          Write-Host "Visual Studio Path: $vsPath"
-        }
-        
-        # Set up VCVARS environment
-        $vcvars64 = "${vsPath}\VC\Auxiliary\Build\vcvars64.bat"
-        Write-Host "VCVARS64 location: $vcvars64"
-        
-        # Create a batch file to set up environment properly
-        $setupScript = @"
-        @echo off
-        echo Setting up Visual Studio environment...
-        call "$vcvars64" x64
-        echo VCVARS Environment Setup Complete
-        echo CL Compiler: 
-        where cl.exe
-        exit 0
-        "@
-        
-        $setupScript | Out-File -FilePath "setup-env.bat" -Encoding ASCII
-        & cmd /c "setup-env.bat"
-
     - name: Display repository structure
       run: |
         Write-Host "=== Repository Structure ==="
-        Get-ChildItem -Recurse -Directory -Force | ForEach-Object { 
-          Write-Host "Directory: $($_.FullName.Replace($env:GITHUB_WORKSPACE, ''))"
-        }
-        
-        Write-Host "=== C++ Source Files ==="
+        Get-ChildItem -Recurse -Directory -Force
+        Write-Host "=== C++ Files Found ==="
         Get-ChildItem -Recurse -Filter "*.cpp" -Name
         Get-ChildItem -Recurse -Filter "*.h" -Name
 
-    - name: Check for source files
+    - name: Build Malayalam IME
       run: |
-        Write-Host "Checking for Malayalam IME source files..."
+        Write-Host "=== Starting Malayalam IME Build Process ==="
         
-        $cppFile = "src\MalayalamIME.cpp"
-        $registerFile = "src\Register.cpp"
+        # Step 1: Verify source files exist
+        $sourceFiles = @(
+          "src\MalayalamIME.cpp",
+          "src\Register.cpp", 
+          "src\MalayalamIME.h",
+          "src\stdafx.h"
+        )
         
-        if (Test-Path $cppFile) {
-          Write-Host "✓ Found MalayalamIME.cpp"
-        } else {
-          Write-Host "✗ ERROR: MalayalamIME.cpp not found!"
-          Write-Host "Available files:"
-          Get-ChildItem -Recurse -Filter "*.cpp" -Name
-          exit 1
-        }
-        
-        if (Test-Path $registerFile) {
-          Write-Host "✓ Found Register.cpp"
-        } else {
-          Write-Host "✗ ERROR: Register.cpp not found!"
-          exit 1
-        }
-
-    - name: Find source directory
-      id: find-source
-      run: |
-        Write-Host "Determining build directory..."
-        
-        $sourceDir = "src"
-        if (Test-Path "$sourceDir\MalayalamIME.cpp") {
-          Write-Host "Using src subdirectory structure"
-        } else {
-          Write-Host "✗ ERROR: Source directory not found!"
-          exit 1
-        }
-        
-        Write-Host "Build directory: $sourceDir"
-        Write-Host "##vso[task.setvariable variable=SOURCE_DIR;isOutput=true]$sourceDir"
-
-    - name: Create build output directory
-      run: |
-        New-Item -ItemType Directory -Force -Path "build-output"
-        Write-Host "Build output directory created"
-
-    - name: Compile using MSBuild
-      id: compile-msbuild
-      run: |
-        Write-Host "=== Attempting MSBuild Compilation ==="
-        
-        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
-        
-        # First try with the solution file if it exists
-        $solutionFile = "$sourceDir\MalayalamIME.sln"
-        if (Test-Path $solutionFile) {
-          Write-Host "Found solution file, building with MSBuild..."
-          
-          # Use MSBuild to build the solution
-          & msbuild $solutionFile /p:Configuration=Release /p:Platform=x64 /p:OutputPath=..\build-output\
-          
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ MSBuild compilation successful!"
-            Write-Host "Build artifact created in build-output"
+        Write-Host "Checking required source files..."
+        foreach ($file in $sourceFiles) {
+          if (Test-Path $file) {
+            Write-Host "✓ Found: $file"
           } else {
-            Write-Host "✗ MSBuild compilation failed, trying alternative method..."
+            Write-Host "✗ ERROR: Missing required file: $file"
+            exit 1
           }
-        } else {
-          Write-Host "No solution file found, will try direct compilation..."
         }
         
-        # Set success flag
-        if (Test-Path "build-output\*.dll") {
-          Write-Host "##vso[task.setvariable variable=MSBUILD_SUCCESS;isOutput=true]true"
-        } else {
-          Write-Host "##vso[task.setvariable variable=MSBUILD_SUCCESS;isOutput=true]false"
-        }
-
-    - name: Direct compilation fallback
-      if: steps.compile-msbuild.outputs.MSBUILD_SUCCESS != 'true'
-      run: |
-        Write-Host "=== Attempting Direct CL Compilation ==="
-        
-        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
-        
-        # Set up Visual Studio environment
+        # Step 2: Find Visual Studio installation
+        Write-Host "Finding Visual Studio 2022..."
         $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $vsPath = & $vsWhere -products Microsoft.VisualStudio.Product.Enterprise -latest -property installationPath
+        
+        if (Test-Path $vsWhere) {
+          $vsPath = & $vsWhere -products Microsoft.VisualStudio.Product.Enterprise -latest -property installationPath
+          Write-Host "Visual Studio Path: $vsPath"
+        } else {
+          Write-Host "Trying Community edition..."
+          $vsPath = & $vsWhere -products Microsoft.VisualStudio.Product.Community -latest -property installationPath
+          if ($vsPath) {
+            Write-Host "Community Edition Path: $vsPath"
+          } else {
+            Write-Host "✗ ERROR: Visual Studio 2022 not found!"
+            exit 1
+          }
+        }
+        
         $vcvars64 = "${vsPath}\VC\Auxiliary\Build\vcvars64.bat"
+        Write-Host "VCVARS64: $vcvars64"
         
-        # Change to source directory
-        Set-Location $sourceDir
+        # Step 3: Create output directory
+        $outputDir = "build-output"
+        if (!(Test-Path $outputDir)) {
+          New-Item -ItemType Directory -Force -Path $outputDir
+          Write-Host "Created output directory: $outputDir"
+        }
         
-        # Create compilation batch script
-        $compileScript = @"
+        # Step 4: Create comprehensive build script
+        Write-Host "Creating build script..."
+        $buildScript = @"
         @echo off
-        echo Compiling Malayalam IME...
-        call "$vcvars64" x64
-        echo Environment setup complete
-        echo Compiling source files...
+        echo ========================================
+        echo    Malayalam IME Build Script
+        echo ========================================
         
-        cl /LD MalayalamIME.cpp Register.cpp ^
-          /Fo..\build-output\ ^
+        echo Setting up Visual Studio environment...
+        call "$vcvars64" x64
+        if %ERRORLEVEL% NEQ 0 (
+          echo ERROR: Failed to set up Visual Studio environment
+          exit 1
+        )
+        
+        echo Environment setup complete
+        echo Current directory: %CD%
+        
+        echo Verifying source files...
+        if not exist "src\MalayalamIME.cpp" (
+          echo ERROR: MalayalamIME.cpp not found in src directory
+          dir src
+          exit 1
+        )
+        
+        if not exist "src\Register.cpp" (
+          echo ERROR: Register.cpp not found in src directory
+          dir src
+          exit 1
+        )
+        
+        if not exist "src\MalayalamIME.def" (
+          echo ERROR: MalayalamIME.def not found in src directory
+          dir src
+          exit 1
+        )
+        
+        echo Source files verified
+        echo.
+        
+        echo Starting compilation...
+        echo ========================================
+        
+        cl /LD src\MalayalamIME.cpp src\Register.cpp ^
+          /Fo$outputDir\ ^
+          /I. ^
           /DWIN32_LEAN_AND_MEAN ^
           /DUNICODE ^
           /D_UNICODE ^
           /DWINVER=0x0601 ^
           /D_WIN32_WINNT=0x0601 ^
+          /D_CRT_SECURE_NO_WARNINGS ^
+          /D_MBCS ^
           /link /DLL ^
           /SUBSYSTEM:WINDOWS ^
-          /OUT:..\build-output\MalayalamIME.dll ^
-          /DEF:MalayalamIME.def ^
-          user32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib msctf.lib
+          /OUT:$outputDir\MalayalamIME.dll ^
+          /DEF:src\MalayalamIME.def ^
+          user32.lib kernel32.lib ole32.lib oleaut32.lib uuid.lib msctf.lib comctl32.lib
         
         if %ERRORLEVEL% EQU 0 (
-          echo ✓ Compilation successful!
+          echo.
+          echo ========================================
+          echo    BUILD SUCCESSFUL!
+          echo ========================================
+          echo Output file: $outputDir\MalayalamIME.dll
+          if exist "$outputDir\MalayalamIME.dll" (
+            dir "$outputDir\MalayalamIME.dll"
+          )
           exit 0
         ) else (
-          echo ✗ Compilation failed!
+          echo.
+          echo ========================================
+          echo    BUILD FAILED!
+          echo ========================================
+          echo Check the error messages above
           exit 1
         )
         "@
         
-        $compileScript | Out-File -FilePath "compile.bat" -Encoding ASCII
+        $buildScript | Out-File -FilePath "build-ime.bat" -Encoding ASCII
+        Write-Host "Build script created: build-ime.bat"
         
-        # Run compilation
-        & cmd /c "compile.bat"
-        
-        if ($LASTEXITCODE -ne 0) {
-          Write-Host "✗ Direct compilation also failed"
-          exit 1
-        } else {
-          Write-Host "✓ Direct compilation successful!"
-        }
-
-    - name: Minimal compilation fallback
-      if: failure()
-      run: |
-        Write-Host "=== Attempting Minimal Compilation ==="
-        
-        $sourceDir = "${{ steps.find-source.outputs.SOURCE_DIR }}"
-        Set-Location $sourceDir
-        
-        # Simple compilation without complex dependencies
-        $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-        $vsPath = & $vsWhere -products Microsoft.VisualStudio.Product.Enterprise -latest -property installationPath
-        $vcvars64 = "${vsPath}\VC\Auxiliary\Build\vcvars64.bat"
-        
-        & $vcvars64 x64
-        
-        # Minimal compilation
-        & cl /LD MalayalamIME.cpp Register.cpp ^
-          /Fo..\build-output\ ^
-          /DUNICODE ^
-          /D_CRT_SECURE_NO_WARNINGS ^
-          /link /DLL ^
-          /OUT:..\build-output\MalayalamIME.dll ^
-          /DEF:MalayalamIME.def
+        # Step 5: Execute build script
+        Write-Host "Executing build script..."
+        & cmd /c "build-ime.bat"
         
         if ($LASTEXITCODE -ne 0) {
-          Write-Host "✗ Minimal compilation failed"
-          exit 1
-        } else {
-          Write-Host "✓ Minimal compilation successful!"
-        }
-
-    - name: Verify compilation output
-      run: |
-        Write-Host "=== Verifying Build Output ==="
-        
-        $dllFile = "build-output\MalayalamIME.dll"
-        
-        if (Test-Path $dllFile) {
-          $fileSize = (Get-Item $dllFile).Length
-          $lastModified = (Get-Item $dllFile).LastWriteTime
+          Write-Host "✗ Primary build method failed, trying alternative approach..."
           
+          # Alternative: Simple direct compilation
+          Write-Host "Attempting direct compilation without build script..."
+          
+          # Set up environment and compile
+          & $vcvars64 x64
+          
+          # Verify files exist
+          if (!(Test-Path "src\MalayalamIME.cpp")) {
+            Write-Host "✗ ERROR: src\MalayalamIME.cpp not found!"
+            exit 1
+          }
+          
+          # Direct compilation command
+          & cl /LD src\MalayalamIME.cpp src\Register.cpp /Fo$outputDir\ /DUNICODE /link /DLL /OUT:$outputDir\MalayalamIME.dll
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "✗ Alternative build also failed!"
+            Write-Host "Final error: Build process completed with exit code $LASTEXITCODE"
+            exit 1
+          }
+        }
+        
+        # Step 6: Verify output
+        Write-Host "Verifying build output..."
+        $dllPath = "$outputDir\MalayalamIME.dll"
+        
+        if (Test-Path $dllPath) {
+          $fileInfo = Get-Item $dllPath
           Write-Host "✅ SUCCESS: MalayalamIME.dll created!"
-          Write-Host "File size: $fileSize bytes"
-          Write-Host "Created: $lastModified"
-          Write-Host "Location: $(Resolve-Path $dllFile)"
+          Write-Host "File path: $dllPath"
+          Write-Host "File size: $($fileInfo.Length) bytes"
+          Write-Host "Created: $($fileInfo.LastWriteTime)"
           
           # List all output files
-          Write-Host "Build output files:"
-          Get-ChildItem build-output\*
+          Write-Host "Build output contents:"
+          Get-ChildItem $outputDir\*
           
         } else {
-          Write-Host "❌ ERROR: MalayalamIME.dll not found in expected location!"
-          Write-Host "Checking all DLL files in repository:"
+          Write-Host "❌ ERROR: Build output not found!"
+          Write-Host "Checking for any DLL files:"
           Get-ChildItem -Recurse -Filter "*.dll" -Name
+          Write-Host "Contents of output directory:"
+          if (Test-Path $outputDir) {
+            Get-ChildItem $outputDir\*
+          } else {
+            Write-Host "Output directory does not exist!"
+          }
           exit 1
         }
 
     - name: Upload compiled DLL
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: MalayalamIME-Enhanced-Build
+        name: MalayalamIME-Enhanced-DLL
         path: |
           build-output/MalayalamIME.dll
           build-output/MalayalamIME.lib
           build-output/MalayalamIME.exp
-          build-output/*.obj
         retention-days: 30
 
     - name: Upload source code
+      if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: MalayalamIME-Source-Code
+        name: MalayalamIME-Source-Files
         path: |
           src/
           docs/
           scripts/
+          build-ime.bat
         retention-days: 30
 
-    - name: Build summary
+    - name: Upload build logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: Build-Error-Logs
+        path: |
+          build-ime.bat
+          *.log
+        retention-days: 30
+
+    - name: Build Summary
       run: |
         Write-Host "═══════════════════════════════════════════════════════"
-        Write-Host "           BUILD SUMMARY"
+        Write-Host "         MALAYALAM IME BUILD SUMMARY"
         Write-Host "═══════════════════════════════════════════════════════"
-        Write-Host "Enhanced Malayalam IME with Chillu Character Support"
-        Write-Host "Build completed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        Write-Host "Enhanced Chillu Character Support"
+        Write-Host "Build Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
         Write-Host ""
         
         $dllFile = "build-output\MalayalamIME.dll"
         if (Test-Path $dllFile) {
           $fileSize = (Get-Item $dllFile).Length
           
-          Write-Host "🎉 Status: SUCCESS"
+          Write-Host "🎉 BUILD STATUS: SUCCESS"
           Write-Host "📁 Output: build-output/MalayalamIME.dll"
           Write-Host "📏 Size: $fileSize bytes"
           Write-Host ""
-          Write-Host "✅ Download the compiled DLL from Artifacts"
+          Write-Host "✅ Download compiled DLL from Artifacts"
           Write-Host "✅ Ready for installation and testing"
           Write-Host ""
-          Write-Host "📋 Features:"
+          Write-Host "🔧 Features Included:"
           Write-Host "   • Enhanced Chillu Character Support"
           Write-Host "   • 150+ Phonetic Mappings"
           Write-Host "   • Visual Studio 2022 Compilation"
+          Write-Host "   • Unicode Support"
           Write-Host "   • Windows IME Compatible"
         } else {
-          Write-Host "❌ Status: FAILED"
+          Write-Host "❌ BUILD STATUS: FAILED"
           Write-Host "🔍 Check build logs for detailed error information"
+          Write-Host "📋 Upload error logs from Artifacts for analysis"
         }
         
         Write-Host "═══════════════════════════════════════════════════════"
